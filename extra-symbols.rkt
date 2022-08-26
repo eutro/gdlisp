@@ -25,6 +25,7 @@
   [var "as a statement"]
   [signal "as a statement"]
   [func "as a statement"]
+  [static "as part of func"]
   [class "as a statement"]
   [.. "in a match pattern"]
   [: "in a binding"]
