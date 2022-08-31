@@ -1,13 +1,13 @@
 #lang typed/racket/base
 
 (require "utils.rkt"
-         racket/port
          racket/format
          racket/match)
 
 (provide class-ir ClassIr
          binding Binding
          Stmt
+         expr-ir ExprIr
          Expr
 
          emit-ir
@@ -30,7 +30,7 @@
 (struct binding
   ([name : String]
    [type-hint : (U String #t #f)]
-   [value : (Option Expr)])
+   [value : (Option ExprIr)])
   #:transparent
   #:type-name Binding)
 
@@ -80,32 +80,20 @@
 
 (define-enum Stmt
   (class ClassIr)
-  (var Binding)
+  (var (Option String) Binding)
   (signal String)
   (func (Option 'static)
         #;name String
         (Listof Binding)
         #;hint (Option String)
-        Expr)
+        ExprIr)
   (begin (Listof Stmt))
-  (expr Expr))
+  (expr ExprIr))
 
 (struct expr-ir
-  ([expr : Expr]
-   [const : Boolean])
+  ([expr : Expr])
   #:transparent
   #:type-name ExprIr)
-
-(define (munge [name : String]) : String
-  (with-output-to-string
-    (λ ()
-      (for ([c (in-string name)])
-        (display
-         (case c
-           [(#\?) "_QMARK_"]
-           [(#\!) "_EMARK_"]
-           [(#\-) "_"]
-           [else c]))))))
 
 (define (emit-ir
          [ir : ClassIr]
@@ -118,19 +106,19 @@
        (λ (f) (f))]
       [root
        (λ (f)
-         (list "class_name " (munge name) (linebreak)
+         (list "class_name " (mangle name) (linebreak)
                (f)))]
       [else
        (λ (f)
          (list (linebreak)
-               "class " (munge name) ":" (linebreak)
+               "class " (mangle name) ":" (linebreak)
                (block (f))
                (linebreak)))])
     (-> (-> Code) Code))
    (λ ()
      (list
       (when parent
-        (list "extends " (munge parent) (linebreak)))
+        (list "extends " (mangle parent) (linebreak)))
       (cond
         [(and (null? body)
               (not root))
@@ -144,44 +132,48 @@
   (match stmt
     [(list 'class ir) (emit-ir ir #:root #false)]
 
-    [(list 'var bd)
+    [(list 'var pref bd)
      (match-define (binding name hint value) bd)
+     (define header : Code
+       (list (if pref (list pref " ") (void))
+             "var "
+             (mangle name)))
      (cond
        [value
         (emit-expr
-         (expr-ir value #f)
+         value
          (λ (code value)
            (list
             code
             (match hint
-              [#t (list "var " (munge name) " := " value (linebreak))]
-              [#f (list "var " (munge name) " = " value (linebreak))]
+              [#t (list header " := " value (linebreak))]
+              [#f (list header " = " value (linebreak))]
               [(? string? h)
-               (list "var " (munge name) ": " (munge h) " = " value (linebreak))]))))]
+               (list header ": " (mangle h) " = " value (linebreak))]))))]
        [else
         (match hint
-          [#t (list "var " (munge name) " := null" (linebreak))]
-          [#f (list "var " (munge name) (linebreak))]
-          [(? string? h) (list "var " (munge name) ": " (munge h) (linebreak))])])]
+          [#t (list header " := null" (linebreak))]
+          [#f (list header (linebreak))]
+          [(? string? h) (list header ": " (mangle h) (linebreak))])])]
 
     [(list 'signal sig)
-     (list "signal " (munge sig) (linebreak))]
+     (list "signal " (mangle sig) (linebreak))]
 
     [(list 'func static? name bindings hint expr)
      (emit-expr
-      (expr-ir expr #f)
+      expr
       (λ (code value)
         (list
          (linebreak)
          (when static? "static ")
          "func "
-         (munge name)
+         (mangle name)
          "("
          (intersperse-commas
           (for/list : (Listof Code)
                     ([bd (in-list bindings)])
             (match-define (binding name hint value) bd)
-            (munge name)))
+            (mangle name)))
          ")"
          (when hint (list " -> " hint))
          ":" (linebreak)
@@ -198,26 +190,26 @@
 
     [(list 'expr expr)
      (emit-expr
-      (expr-ir expr #f)
+      expr
       (λ (code value)
         (list code
               value (linebreak))))]))
 
 (define-enum Expr
   (const Any)
-  (begin (Listof Expr))
-  (cond (Listof (Pair Expr Expr))
-        (Option Expr))
+  (begin (Listof ExprIr))
+  (cond (Listof (Pair ExprIr ExprIr))
+        (Option ExprIr))
   (let (Option String)
     (Listof Binding)
-    Expr)
-  (for String #;in Expr
-       Expr)
-  (match Expr
-    (Listof (Pair String Expr)))
-  (call Expr (Listof Expr))
+    ExprIr)
+  (for String #;in ExprIr
+       ExprIr)
+  (match ExprIr
+    (Listof (Pair String ExprIr)))
+  (call ExprIr (Listof ExprIr))
   (var String)
-  (asm (Listof (U Expr String))))
+  (asm (Listof (U ExprIr String))))
 
 (define-enum StackVal
   (expr Code)
@@ -273,8 +265,8 @@
   (define expr-null (list 'expr "null"))
 
   (define code
-    (let recur : Code ([expr (expr-ir-expr expr)])
-      (match expr
+    (let recur : Code ([expr expr])
+      (match (expr-ir-expr expr)
 
         [(list 'const v)
          (push! (list 'expr (~s v)))
@@ -346,9 +338,9 @@
               [value
                (list
                 (recur value)
-                "var " (munge name) " = " (val->code (pop!)) (linebreak))]
+                "var " (mangle name) " = " (val->code (pop!)) (linebreak))]
               [else
-               (list "var " (munge name) (linebreak))]))
+               (list "var " (mangle name) (linebreak))]))
           (recur body))]
 
         [(list 'for name target body)
@@ -356,7 +348,7 @@
              (list
               (ensure-evaluated!)
               (recur target)
-              "for " (munge name) " in " (val->code (pop!)) ":" (linebreak)
+              "for " (mangle name) " in " (val->code (pop!)) ":" (linebreak)
               (block
                (list
                 (recur body)
@@ -402,7 +394,7 @@
              (push! (list 'expr (list calleev "(" argvs ")")))))]
 
         [(list 'var name)
-         (push! (list 'var (munge name)))
+         (push! (list 'var (mangle name)))
          (void)]
 
         [(list 'asm asm)
@@ -422,29 +414,3 @@
              (push! (list 'expr expr))))])))
 
   (fmt code (val->code (pop!))))
-
-(module+ test
-  (display-code
-   (emit-ir
-    (class-ir
-     "MyClass"
-     "ParentClass"
-     `((signal "haha")
-       (class
-         ,(class-ir
-           "InnerClass"
-           "YourMom"
-           `((signal "how")
-             (var
-              ,(binding
-                "haha"
-                #f
-                `(begin
-                   ((call (var "print")
-                          ((cond
-                             (((const 2) . (const 0))
-                              ((const 1) . (const 3)))
-                             (var "null"))))
-                    (const 2))))))))))))
-  ;
-  )

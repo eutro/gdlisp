@@ -4,7 +4,8 @@
          (for-syntax
           racket/base
           racket/format
-          syntax/parse))
+          syntax/parse)
+         syntax/parse/define)
 
 (begin-for-syntax
   (define-syntax-class infix
@@ -75,10 +76,10 @@
                 (#%gdscript
                  "(" (!expr lhs) ") "
                  clause.str
-                 " (" (!expr rhs) ") "))]
-             [(_ lhs rhses (... ...))
+                 " (" (!expr rhs) ")"))]
+             [(_ lhs rhs rhses (... ...))
               (syntax/loc stx
-                (clause.name lhs (clause.name rhses (... ...))))]))
+                (clause.name (clause.name lhs rhs) rhses (... ...)))]))
          ...
          (provide clause.name ...)))]))
 
@@ -112,3 +113,20 @@
 
 (define-castlike
   is as)
+
+(provide if when)
+
+(define-syntax-parse-rule
+  (if pred-expr:expr
+      then-expr:expr
+      else-expr:expr)
+  (cond
+    [pred-expr then-expr]
+    [else else-expr]))
+
+(define-syntax-parse-rule
+  (when pred-expr:expr
+    body-exprs:expr ...)
+  (cond
+    [pred-expr
+     body-exprs ...]))

@@ -20,6 +20,7 @@
 
 (define-disallows
   [class-name "at the top level"]
+  [export "in a definition"]
   [extends "in class"]
   [match "as an expression"]
   [var "as a statement"]
