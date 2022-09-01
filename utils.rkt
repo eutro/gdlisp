@@ -17,15 +17,23 @@
            lst
            (list* (car lst) v (loop (cdr lst)))))]))
 
-(define (mangle [name : String]) : String
+(: mangle (-> String String))
+(define (mangle name)
   (with-output-to-string
     (λ ()
-      (cond
-        [(zero? (string-length name))
-         (display "_BLANK_")]
-        [(char<=? #\0 (string-ref name 0) #\9)
-         (display "N")])
-      (for ([c (in-string name)])
+      (define i
+        (cond
+          [(zero? (string-length name))
+           (display "_BLANK_")
+           0]
+          [(char<=? #\0 (string-ref name 0) #\9)
+           (display "N")
+           0]
+          [(char=? (string-ref name 0) #\$)
+           (display "$")
+           1]
+          [else 0]))
+      (for ([c (in-string name i)])
         (display
          (match c
            [(? (λ (c)
@@ -34,8 +42,30 @@
                      (char<=? #\0 c #\9))))
             c]
            [(or #\_ #\-) "_"]
+           ;; copied shamelessly from Clojure...
+           [#\: "_COLON_"]
+           [#\+ "_PLUS_"]
+           [#\> "_GT_"]
+           [#\< "_LT_"]
+           [#\= "_EQ_"]
+           [#\~ "_TILDE_"]
+           [#\! "_BANG_"]
+           [#\@ "_CIRCA_"]
+           [#\# "_SHARP_"]
+           [#\' "_SINGLEQUOTE_"]
+           [#\" "_DOUBLEQUOTE_"]
+           [#\% "_PERCENT_"]
+           [#\^ "_CARET_"]
+           [#\& "_AMPERSAND_"]
+           [#\* "_STAR_"]
+           [#\| "_BAR_"]
+           [#\{ "_LBRACE_"]
+           [#\} "_RBRACE_"]
+           [#\[ "_LBRACK_"]
+           [#\] "_RBRACK_"]
+           [#\/ "_SLASH_"]
+           [#\\ "_BSLASH_"]
            [#\? "_QMARK_"]
-           [#\! "_EMARK_"]
            [#\space "_SPACE_"]
            [_
             (format "_U~a_"

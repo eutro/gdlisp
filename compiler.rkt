@@ -7,7 +7,8 @@
 (provide class-ir ClassIr
          binding Binding
          Stmt
-         expr-ir ExprIr
+         (struct-out expr-ir)
+         ExprIr
          Expr
 
          emit-ir
@@ -149,7 +150,8 @@
               [#t (list header " := " value (linebreak))]
               [#f (list header " = " value (linebreak))]
               [(? string? h)
-               (list header ": " (mangle h) " = " value (linebreak))]))))]
+               (list header ": " (mangle h) " = " value (linebreak))])))
+         'expr)]
        [else
         (match hint
           [#t (list header " := null" (linebreak))]
@@ -181,7 +183,8 @@
           (list
            code
            "return " value (linebreak)))
-         (linebreak))))]
+         (linebreak)))
+      'expr)]
 
     [(list 'begin stmts)
      (for/list : (Listof Code)
@@ -193,7 +196,8 @@
       expr
       (λ (code value)
         (list code
-              value (linebreak))))]))
+              value (linebreak)))
+      'expr)]))
 
 (define-enum Expr
   (const Any)
@@ -226,9 +230,37 @@
   (begin0 (format "__temp_~a" v)
     (thread-cell-set! tempc (add1 v))))
 
-(define (emit-expr
-         [expr : ExprIr]
-         [fmt : (-> Code Code Code)]) : Code
+(define-type Position (U 'stmt 'expr 'tail))
+
+(: expr-null StackVal)
+(define expr-null (list 'expr "null"))
+
+(: block-expr-in-pos (-> Position
+                         (Values
+                          Code
+                          Code
+                          StackVal)))
+(define (block-expr-in-pos pos)
+  (case pos
+    [(expr)
+     (define temp (gentemp))
+     (values
+      (list "var " temp (linebreak))
+      (list temp " = ")
+      (list 'var temp))]
+    [(stmt)
+     (values
+      (void)
+      (void)
+      expr-null)]
+    [(tail)
+     (values
+      (void)
+      (list "return ")
+      expr-null)]))
+
+(: emit-expr (-> ExprIr (-> Code Code Code) Position Code))
+(define (emit-expr expr fmt pos)
   (define stack : (Listof StackVal) null)
 
   (define (push! [v : StackVal])
@@ -262,28 +294,41 @@
   (define (val->code [val : StackVal]) : Code
     (cadr val))
 
-  (define expr-null (list 'expr "null"))
-
   (define code
-    (let recur : Code ([expr expr])
+    (let recur : Code
+         ([expr expr]
+          [pos : Position pos]
+          ;; expr -> push
+          ;; tail -> maybe return and push
+          ;; stmt -> don't push
+          )
       (match (expr-ir-expr expr)
 
         [(list 'const v)
-         (push! (list 'expr (~s v)))
-         (void)]
+         (cond
+           [(eq? pos 'stmt)
+            (list "pass" (linebreak))]
+           [else
+            (push! (list 'expr (~s v)))
+            (void)])]
 
         [(list 'begin exprs)
          (cond
            [(null? exprs)
-            (push! expr-null)]
+            (cond
+              [(eq? pos 'stmt)
+               (list "pass" (linebreak))]
+              [else
+               (push! expr-null)
+               (void)])]
            [else
             (let loop ([exprs exprs])
-              (define code (recur (car exprs)))
-              (if (null? (cdr exprs))
+              (define last? (null? (cdr exprs)))
+              (define posn (if last? pos 'stmt))
+              (define code (recur (car exprs) posn))
+              (if last?
                   code
                   (list code
-                        (val->code (pop!))
-                        (linebreak)
                         (loop (cdr exprs)))))])]
 
         [(list 'cond clauses else-clause)
@@ -291,16 +336,19 @@
            [(null? clauses)
             (cond
               [else-clause
-               (recur else-clause)]
+               (recur else-clause pos)]
+              [(eq? pos 'stmt)
+               (list "pass" (linebreak))]
               [else
                (push! expr-null)
                (void)])]
            [else
-            (define temp (gentemp))
+            (define-values (header emit result)
+              (block-expr-in-pos pos))
             (define code
               (list
                (ensure-evaluated!)
-               "var " temp (linebreak)
+               header
                (let loop : Code
                     ([clause (car clauses)]
                      [next-clauses (cdr clauses)])
@@ -309,12 +357,13 @@
                        #f
                        (car next-clauses)))
                  (match-define (cons predicate value) clause)
-                 (list (recur predicate)
+                 (list (recur predicate 'expr)
                        "if " (val->code (pop!)) ":" (linebreak)
                        (block
                         (list
-                         (recur value)
-                         temp " = " (val->code (pop!)) (linebreak)))
+                         (recur value pos)
+                         (unless (eq? pos 'stmt)
+                           (list emit (val->code (pop!)) (linebreak)))))
                        (when (or next-clause else-clause)
                          (list
                           "else:" (linebreak)
@@ -322,9 +371,11 @@
                            (if next-clause
                                (loop next-clause (cdr next-clauses))
                                (list
-                                (recur else-clause)
-                                temp " = " (val->code (pop!)) (linebreak))))))))))
-            (push! (list 'var temp))
+                                (recur else-clause pos)
+                                (unless (eq? pos 'stmt)
+                                  (list emit (val->code (pop!)) (linebreak))))))))))))
+            (unless (eq? pos 'stmt)
+              (push! result))
             code])]
 
         [(list 'let name bindings body)
@@ -337,31 +388,30 @@
             (cond
               [value
                (list
-                (recur value)
+                (recur value 'expr)
                 "var " (mangle name) " = " (val->code (pop!)) (linebreak))]
               [else
                (list "var " (mangle name) (linebreak))]))
-          (recur body))]
+          (recur body pos))]
 
         [(list 'for name target body)
          (begin0
              (list
               (ensure-evaluated!)
-              (recur target)
+              (recur target 'expr)
               "for " (mangle name) " in " (val->code (pop!)) ":" (linebreak)
-              (block
-               (list
-                (recur body)
-                (val->code (pop!)) (linebreak))))
-           (push! expr-null))]
+              (block (recur body 'stmt)))
+           (unless (eq? pos 'stmt)
+             (push! expr-null)))]
 
         [(list 'match target clauses)
-         (define temp (gentemp))
+         (define-values (header emit result)
+           (block-expr-in-pos pos))
          (begin0
              (list
               (ensure-evaluated!)
-              (recur target)
-              "var " temp (linebreak)
+              (recur target 'expr)
+              header
               "match " (val->code (pop!)) ":" (linebreak)
               (block
                (if (null? clauses)
@@ -371,46 +421,51 @@
                       (car clause) ":" (linebreak)
                       (block
                        (list
-                        (recur (cdr clause))
-                        temp " = " (val->code (pop!)) (linebreak))))))))
-           (push! (list 'var temp)))]
+                        (recur (cdr clause) pos)
+                        (unless (eq? pos 'stmt)
+                          (list emit (val->code (pop!)) (linebreak))))))))))
+           (push! result))]
 
         [(list 'call callee args)
-         (begin0
-             (list
-              (recur callee)
-              (for/list : (Listof Code)
-                        ([arg (in-list args)])
-                (recur arg)))
-           (let ()
-             (define argvs
-               (intersperse-commas
-                (reverse
-                 (for/list : (Listof Code)
-                           ([_arg (in-list args)])
-                   (val->code (pop!))))))
-             (define calleev
-               (val->code (pop!)))
-             (push! (list 'expr (list calleev "(" argvs ")")))))]
+         (list
+          (recur callee 'expr)
+          (for/list : (Listof Code)
+                    ([arg (in-list args)])
+            (recur arg 'expr))
+          (let ()
+            (define argvs
+              (intersperse-commas
+               (reverse
+                (for/list : (Listof Code)
+                          ([_arg (in-list args)])
+                  (val->code (pop!))))))
+            (define calleev
+              (val->code (pop!)))
+            (push! (list 'expr (list calleev "(" argvs ")")))
+            (when (eq? pos 'stmt)
+              (list (val->code (pop!)) (linebreak)))))]
 
         [(list 'var name)
          (push! (list 'var (mangle name)))
-         (void)]
+         (when (eq? pos 'stmt)
+           (list (val->code (pop!)) (linebreak)))]
 
         [(list 'asm asm)
-         (begin0
-             (for/list : (Listof Code)
-                       ([v (in-list asm)])
-               (unless (string? v)
-                 (recur v)))
-           (let ()
-             (define expr
-               (reverse
-                (for/list : (Listof Code)
-                          ([v (in-list (reverse asm))])
-                  (if (string? v)
-                      v
-                      (val->code (pop!))))))
-             (push! (list 'expr expr))))])))
+         (list
+          (for/list : (Listof Code)
+                    ([v (in-list asm)])
+            (unless (string? v)
+              (recur v 'expr)))
+          (let ()
+            (define expr
+              (reverse
+               (for/list : (Listof Code)
+                         ([v (in-list (reverse asm))])
+                 (if (string? v)
+                     v
+                     (val->code (pop!))))))
+            (push! (list 'expr expr))
+            (when (eq? pos 'stmt)
+              (list (val->code (pop!)) (linebreak)))))])))
 
   (fmt code (val->code (pop!))))

@@ -69,7 +69,7 @@
              {~? [(_) #'identity]}
              [(_ x)
               (syntax/loc stx
-                {~? (#%gdscript "(" (!expr x) ")")
+                {~? (#%gdscript pre ... "(" (!expr x) ")")
                     x})]
              [(_ lhs rhs)
               (syntax/loc stx
@@ -114,7 +114,7 @@
 (define-castlike
   is as)
 
-(provide if when)
+(provide if when ref)
 
 (define-syntax-parse-rule
   (if pred-expr:expr
@@ -130,3 +130,7 @@
   (cond
     [pred-expr
      body-exprs ...]))
+
+(define-syntax-parse-rule
+  (ref target:expr key:expr)
+  (#%gdscript (!expr target) "[" (!expr key) "]"))

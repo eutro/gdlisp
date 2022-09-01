@@ -269,7 +269,7 @@
 
   (pattern (cond
             ~!
-            [{~and pred-expr:gd-expr {~not else}} then-expr:gd-block] ...
+            [{~and {~not else} pred-expr:gd-expr} then-expr:gd-block] ...
             {~optional [else else-expr:gd-block]})
            #:attr expr
            (datum
@@ -286,7 +286,8 @@
               (binding.binding ...)
               body.expr)))
 
-  (pattern (begin ~! :gd-block))
+  (pattern (begin ~! e:gd-block)
+           #:attr expr (expr-ir-expr (datum e.expr)))
 
   (pattern (for ~! ([name:gd-id target:gd-expr])
                 body:gd-block)
@@ -332,11 +333,11 @@
   (pattern #true #:attr expr '(var "true"))
   (pattern #false #:attr expr '(var "false"))
 
-  (pattern (field:gd-fieldref target:gd-expr)
+  (pattern (field:gd-fieldref ~! target:gd-expr)
            #:attr expr
            (datum
             (asm (target.expr "." field.name))))
-  (pattern (method:gd-methodref target:gd-expr args:gd-expr ...)
+  (pattern (method:gd-methodref ~! target:gd-expr args:gd-expr ...)
            #:attr expr
            (quasidatum
             (call
