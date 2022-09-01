@@ -92,7 +92,8 @@
   (expr ExprIr))
 
 (struct expr-ir
-  ([expr : Expr])
+  ([expr : Expr]
+   [stx : (Syntaxof Any)])
   #:transparent
   #:type-name ExprIr)
 
@@ -444,7 +445,8 @@
            (raise-syntax-error
             'recur
             (format "target ~s does not exist, or recur is not in tail position"
-                    target)))
+                    target)
+            (expr-ir-stx expr)))
          (match-define (tail cont-name var-names)
            (hash-ref tails target))
          (unless (= (length var-names)
@@ -454,7 +456,8 @@
             (format "target ~s takes ~a arguments, but called with ~a"
                     target
                     (length var-names)
-                    (length args))))
+                    (length args))
+            (expr-ir-stx expr)))
          (begin0
              (list
               (for/list : (Listof Code)

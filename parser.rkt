@@ -4,6 +4,7 @@
          "utils.rkt"
          "extra-symbols.rkt"
          racket/format
+         racket/list
          racket/string
          (rename-in
           racket/match
@@ -38,11 +39,11 @@
   #:description "binding"
   #:attributes (binding)
   #:literals (: :=)
-  (pattern {~seq name:gd-id value:gd-expr}
+  (pattern {~seq name:gd-id : type:gd-id value:gd-expr}
            #:attr binding
            (binding
             (attribute name.dat-str)
-            #f
+            (attribute type.dat-str)
             (attribute value.expr)))
   (pattern {~seq name:gd-id : type:gd-id}
            #:attr binding
@@ -56,12 +57,18 @@
             (attribute name.dat-str)
             #t
             (attribute value.expr)))
-  (pattern {~seq name:gd-id : type:gd-id value:gd-expr}
+  (pattern {~seq name:gd-id value:gd-expr}
            #:attr binding
            (binding
             (attribute name.dat-str)
-            (attribute type.dat-str)
-            (attribute value.expr))))
+            #f
+            (attribute value.expr)))
+  (pattern {~seq name:gd-id}
+           #:attr binding
+           (binding
+            (attribute name.dat-str)
+            #f
+            #f)))
 
 (define-syntax-class gd-param
   #:description "function parameter"
@@ -156,27 +163,32 @@
              ", ")))
   (pattern :gd-pattern))
 
+(define-splicing-syntax-class gd-block-inner
+  #:description #f
+  #:attributes (expr)
+  #:literals [define]
+  (pattern {~seq {~and (define ~! bd:gd-binding) stx} tail-exprs ...}
+           #:cut
+           #:with (tail:gd-block-inner) #'(tail-exprs ...)
+           #:attr expr
+           (expr-ir
+            (datum (let #f (bd.binding) tail.expr))
+            #'stx))
+  (pattern {~seq exp:gd-expr tail-exprs ...+}
+           #:cut
+           #:with (tail:gd-block-inner) #'(tail-exprs ...)
+           #:attr expr
+           (expr-ir
+            (datum (begin (exp.expr tail.expr)))
+            #'exp))
+  (pattern stx
+           #:cut
+           #:with :gd-expr #'stx))
+
 (define-splicing-syntax-class gd-block
   #:description "sequence of expressions"
   #:attributes (expr)
-  #:literals [define]
-  (pattern {~seq {~or* (define ~! bd:gd-binding)
-                       stmt:gd-expr}
-                 ...
-                 last:gd-expr}
-           #:attr expr
-           (foldr
-            (λ (v acc)
-              (expr-ir
-               (rkt-match v
-                 [(list dfn #f)
-                  `(let #f (,dfn) ,acc)]
-                 [(list #f expr)
-                  `(begin (,expr ,acc))])))
-            (attribute last.expr)
-            (datum
-             (({~? bd.binding #f} {~? stmt.expr})
-              ...)))))
+  (pattern :gd-block-inner))
 
 (define stop-exprs
   (syntax-e
@@ -188,6 +200,7 @@
       #%app #%datum #%top]))
 
 (define-syntax-class gd-special-form-name
+  #:description #f
   #:literals [cond let begin for match
               var func define
               signal class
@@ -201,6 +214,7 @@
             #%gdscript recur}))
 
 (define-syntax-class gd-special-form
+  #:description #f
   (pattern {~or* :gd-special-form-name
                  (:gd-special-form-name . _)}))
 
@@ -210,10 +224,11 @@
       stx))
 
 (define-syntax-class gd-stmt
-  #:description "statement"
+  #:description #f
   #:attributes (stmt)
   (pattern :gd-special-form #:with :gd-stmt-postexpand this-syntax)
   (pattern form
+           #:cut
            #:do [(define expanded (maybe-local-expand #'form))]
            #:with :gd-stmt-postexpand expanded
            #;#;
@@ -223,16 +238,16 @@
                  (writeln (datum expr))]))
 
 (define-syntax-class gd-expr
-  #:description "expression"
+  #:description #f
   #:attributes (expr)
-  #:commit
   (pattern :gd-special-form
            #:with e:gd-expr-postexpand this-syntax
-           #:attr expr (expr-ir (datum e.expr)))
+           #:attr expr (expr-ir (datum e.expr) this-syntax))
   (pattern form
+           #:cut
            #:do [(define expanded (maybe-local-expand #'form))]
            #:with e:gd-expr-postexpand expanded
-           #:attr expr (expr-ir (datum e.expr))
+           #:attr expr (expr-ir (datum e.expr) this-syntax)
            #;#;
            #:do [(displayln "--- expansion ---")
                  (writeln (syntax->datum #'form))
@@ -248,6 +263,7 @@
            #:attr asm (attribute exp.expr)))
 
 (define-syntax-class gd-fieldref
+  #:description #f
   #:attributes (name)
   (pattern ref:id
            #:do [(define sym-val (symbol->string (syntax-e #'ref)))]
@@ -255,6 +271,7 @@
            #:attr name (mangle (substring sym-val 2))))
 
 (define-syntax-class gd-methodref
+  #:description #f
   #:attributes (name)
   (pattern ref:id
            #:do [(define sym-val (symbol->string (syntax-e #'ref)))]
@@ -304,7 +321,9 @@
 
   (pattern (match ~!
              target:gd-expr
-             [pattern:gd-top-pattern body:gd-block] ...)
+             {~describe
+              "match clause"
+              [pattern:gd-top-pattern body:gd-block]} ...)
            #:attr expr
            (datum
             (match target.expr
@@ -315,39 +334,49 @@
            (datum
             (asm (asm-e.asm ...))))
 
-  (pattern {~describe "list literal" [~brackets ~! subexprs:gd-expr ...]}
+  (pattern {~describe
+            "list literal"
+            {~and {~describe #:opaque "list literal" [~brackets ~! _ ...]}
+                  [~brackets subexprs:gd-expr ...]}}
            #:attr expr
            (with-datum ([(exprs ...)
                          (intersperse (datum (subexprs.expr ...)) ", ")])
              (datum
               (asm ("[" exprs ... "]")))))
 
-  (pattern {~describe "map literal" {~braces ~! kv:kv-pair ...}}
+  (pattern {~describe
+            "map literal"
+            {~and {~describe #:opaque "map literal" {~braces ~! _ ...}}
+                  {~braces kv:kv-pair ...}}}
            #:attr expr
-           (with-datum ([kvs
-                         (intersperse
-                          (for/list ([pair (datum ([kv.key kv.val] ...))])
-                            (with-datum ([[k v] pair])
-                              (datum (asm (k ": " v)))))
-                          ", ")])
-             (datum
-              (asm ("{" (asm kvs) "}")))))
+           (with-datum ([(kvs ...)
+                         (append*
+                          (intersperse
+                           (for/list ([pair (datum ([kv.key kv.val] ...))])
+                             (with-datum ([[k v] pair])
+                               (datum (k ": " v))))
+                           (list ", ")))])
+             (datum (asm ("{" kvs ... "}")))))
 
   (pattern name:gd-id #:attr expr (datum (var name.dat-str)))
   (pattern n:number #:attr expr `(const ,(syntax-e #'n)))
   (pattern s:string #:attr expr `(const ,(syntax-e #'s)))
-  (pattern #true #:attr expr '(var "true"))
-  (pattern #false #:attr expr '(var "false"))
+  (pattern b:boolean #:attr expr `(var ,(if (syntax-e #'b) "true" "false")))
 
-  (pattern (field:gd-fieldref ~! target:gd-expr)
+  (pattern {~describe
+            "field reference"
+            (field:gd-fieldref ~! target:gd-expr)}
            #:attr expr
            (datum
             (asm (target.expr "." field.name))))
-  (pattern (method:gd-methodref ~! target:gd-expr args:gd-expr ...)
+  (pattern {~describe
+            "method call"
+            (method:gd-methodref ~! target:gd-expr args:gd-expr ...)}
            #:attr expr
            (quasidatum
             (call
-             (undatum (expr-ir (datum (asm (target.expr "." method.name)))))
+             (undatum (expr-ir (datum (asm (target.expr "." method.name)))
+                               this-syntax))
              (args.expr ...))))
 
   (pattern {~describe
@@ -358,6 +387,7 @@
             (call callee.expr (args.expr ...)))))
 
 (define-syntax-class gd-var-prefix
+  #:description "variable prefix"
   #:attributes (pref)
   #:literals [export]
   (pattern export
@@ -372,23 +402,31 @@
              (map syntax-e (datum (args ...)))))))
 
 (define-syntax-class gd-def
-  #:attributes (stmt)
   #:description "definition"
+  #:attributes (stmt)
   #:literals [var func define : static]
-  (pattern ({~or* {~and var ~!} define}
-            {~optional exp:gd-var-prefix}
-            binding:gd-binding)
+  #:commit
+  (pattern {~describe
+            "variable definition"
+            ({~or* {~and var ~!} define}
+             {~optional exp:gd-var-prefix}
+             binding:gd-binding)}
+           #:with {~describe
+                   "variable definition"
+                   {~not _:gd-var-prefix}} #'binding
            #:attr stmt
            (datum
             (var exp.pref binding.binding)))
-  (pattern ({~or* {~and func ~!} define}
-            {~optional {~and static {~bind [is-static #t]}}}
-            (name:gd-id params:gd-param ...)
-            ~!
-            {~commit
-             {~seq
-              {~optional {~seq : ~! return-hint:gd-id}}
-              body:gd-block}})
+  (pattern {~describe
+            "function definition"
+            ({~or* {~and func ~!} define}
+             {~optional {~and static ~! {~bind [is-static 'static]}}}
+             (name:gd-id params:gd-param ...)
+             ~!
+             {~commit
+              {~seq
+               {~optional {~seq : ~! return-hint:gd-id}}
+               ~! body:gd-block}})}
            #:attr stmt
            (quasidatum
             (func
@@ -399,12 +437,12 @@
              body.expr))))
 
 (define-syntax-class gd-stmt-postexpand
-  #:attributes (stmt)
   #:description "statement"
-  #:literals [signal class define begin]
+  #:attributes (stmt)
+  #:literals [signal class var func define begin]
   #:commit
 
-  (pattern {~and (define ~! _ ...) :gd-def})
+  (pattern {~and ({~or* var func define} ~! _ ...) :gd-def})
   (pattern :gd-def)
 
   (pattern (class ~! name:gd-id
@@ -428,7 +466,7 @@
 
   (pattern gde:gd-expr-postexpand
            #:attr stmt
-           (list 'expr (expr-ir (datum gde.expr)))))
+           (list 'expr (expr-ir (datum gde.expr) #'gde))))
 
 (define-splicing-syntax-class gd-class-stmts
   #:description "class statements"
