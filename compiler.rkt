@@ -207,6 +207,7 @@
   (let (Option String)
     (Listof Binding)
     ExprIr)
+  (recur String (Listof ExprIr))
   (for String #;in ExprIr
        ExprIr)
   (match ExprIr
@@ -235,14 +236,10 @@
 (: expr-null StackVal)
 (define expr-null (list 'expr "null"))
 
-(: block-expr-in-pos (-> Position
-                         (Values
-                          Code
-                          Code
-                          StackVal)))
+(: block-expr-in-pos (-> Position (Values Code Code StackVal)))
 (define (block-expr-in-pos pos)
   (case pos
-    [(expr)
+    [(expr tail)
      (define temp (gentemp))
      (values
       (list "var " temp (linebreak))
@@ -252,12 +249,15 @@
      (values
       (void)
       (void)
-      expr-null)]
-    [(tail)
-     (values
-      (void)
-      (list "return ")
       expr-null)]))
+
+(struct tail
+  ([cont-var : String]
+   [tail-args : (Listof String)])
+  #:type-name Tail)
+
+(: empty-tails (Immutable-HashTable String Tail))
+(define empty-tails (make-immutable-hash))
 
 (: emit-expr (-> ExprIr (-> Code Code Code) Position Code))
 (define (emit-expr expr fmt pos)
@@ -301,7 +301,9 @@
           ;; expr -> push
           ;; tail -> maybe return and push
           ;; stmt -> don't push
+          [tails : (Immutable-HashTable String Tail) empty-tails]
           )
+      
       (match (expr-ir-expr expr)
 
         [(list 'const v)
@@ -324,8 +326,11 @@
            [else
             (let loop ([exprs exprs])
               (define last? (null? (cdr exprs)))
-              (define posn (if last? pos 'stmt))
-              (define code (recur (car exprs) posn))
+              (define code
+                (recur
+                 (car exprs)
+                 (if last? pos 'stmt)
+                 (if last? tails empty-tails)))
               (if last?
                   code
                   (list code
@@ -336,7 +341,7 @@
            [(null? clauses)
             (cond
               [else-clause
-               (recur else-clause pos)]
+               (recur else-clause pos tails)]
               [(eq? pos 'stmt)
                (list "pass" (linebreak))]
               [else
@@ -357,11 +362,11 @@
                        #f
                        (car next-clauses)))
                  (match-define (cons predicate value) clause)
-                 (list (recur predicate 'expr)
+                 (list (recur predicate 'expr empty-tails)
                        "if " (val->code (pop!)) ":" (linebreak)
                        (block
                         (list
-                         (recur value pos)
+                         (recur value pos tails)
                          (unless (eq? pos 'stmt)
                            (list emit (val->code (pop!)) (linebreak)))))
                        (when (or next-clause else-clause)
@@ -371,36 +376,104 @@
                            (if next-clause
                                (loop next-clause (cdr next-clauses))
                                (list
-                                (recur else-clause pos)
+                                (recur else-clause pos tails)
                                 (unless (eq? pos 'stmt)
                                   (list emit (val->code (pop!)) (linebreak))))))))))))
             (unless (eq? pos 'stmt)
               (push! result))
             code])]
 
-        [(list 'let name bindings body)
+        [(list 'let #f bindings body)
          (list
           (ensure-evaluated!)
           (for/list : (Listof Code)
                     ([b (in-list bindings)])
-            (match-define (binding name hint value)
-              b)
+            (match-define (binding name hint value) b)
             (cond
               [value
                (list
-                (recur value 'expr)
+                (recur value 'expr empty-tails)
                 "var " (mangle name) " = " (val->code (pop!)) (linebreak))]
               [else
                (list "var " (mangle name) (linebreak))]))
-          (recur body pos))]
+          (recur body pos tails))]
+
+        [(list 'let (? string? name) bindings body)
+         (define-values (header emit result)
+           (block-expr-in-pos pos))
+         (define mangled (mangle name))
+         (define cont-name (string-append "__continue_" mangled))
+         (define temp-names
+           (for/list : (Listof String)
+                     ([b (in-list bindings)]
+                      [i (in-naturals)])
+             (~a "__" mangled "_arg_" i)))
+         (define tailv (tail cont-name temp-names))
+         (list
+          (ensure-evaluated!)
+          "var " cont-name " = true" (linebreak)
+          (for/list : (Listof Code)
+                    ([b (in-list bindings)]
+                     [tmp (in-list temp-names)])
+            (match-define (binding name hint value) b)
+            (cond
+              [value
+               (list
+                (recur value 'expr empty-tails)
+                "var " tmp " = " (val->code (pop!)) (linebreak))]
+              [else
+               (list "var " tmp (linebreak))]))
+          header
+          "while " cont-name ":" (linebreak)
+          (block
+           (list
+            cont-name " = false" (linebreak)
+            (for/list : (Listof Code)
+                      ([b (in-list bindings)]
+                       [tmp (in-list temp-names)])
+              (list
+               "var " (mangle (binding-name b)) " = " tmp (linebreak)))
+            (recur body pos (hash-set tails mangled tailv))
+            (unless (eq? pos 'stmt)
+              (begin0 (list emit (val->code (pop!)) (linebreak))
+                (push! result))))))]
+
+        [(list 'recur target args)
+         (define mangled (mangle target))
+         (unless (hash-has-key? tails mangled)
+           (raise-syntax-error
+            'recur
+            (format "target ~s does not exist, or recur is not in tail position"
+                    target)))
+         (match-define (tail cont-name var-names)
+           (hash-ref tails target))
+         (unless (= (length var-names)
+                    (length args))
+           (raise-syntax-error
+            'recur
+            (format "target ~s takes ~a arguments, but called with ~a"
+                    target
+                    (length var-names)
+                    (length args))))
+         (begin0
+             (list
+              (for/list : (Listof Code)
+                        ([name (in-list var-names)]
+                         [val (in-list args)])
+                (list
+                 (recur val 'expr empty-tails)
+                 name " = " (val->code (pop!)) (linebreak)))
+              cont-name " = true" (linebreak))
+           (unless (eq? pos 'tail)
+             (push! expr-null)))]
 
         [(list 'for name target body)
          (begin0
              (list
               (ensure-evaluated!)
-              (recur target 'expr)
+              (recur target 'expr empty-tails)
               "for " (mangle name) " in " (val->code (pop!)) ":" (linebreak)
-              (block (recur body 'stmt)))
+              (block (recur body 'stmt empty-tails)))
            (unless (eq? pos 'stmt)
              (push! expr-null)))]
 
@@ -410,7 +483,7 @@
          (begin0
              (list
               (ensure-evaluated!)
-              (recur target 'expr)
+              (recur target 'expr empty-tails)
               header
               "match " (val->code (pop!)) ":" (linebreak)
               (block
@@ -421,17 +494,18 @@
                       (car clause) ":" (linebreak)
                       (block
                        (list
-                        (recur (cdr clause) pos)
+                        (recur (cdr clause) pos tails)
                         (unless (eq? pos 'stmt)
                           (list emit (val->code (pop!)) (linebreak))))))))))
-           (push! result))]
+           (unless (eq? pos 'stmt)
+             (push! result)))]
 
         [(list 'call callee args)
          (list
-          (recur callee 'expr)
+          (recur callee 'expr empty-tails)
           (for/list : (Listof Code)
                     ([arg (in-list args)])
-            (recur arg 'expr))
+            (recur arg 'expr empty-tails))
           (let ()
             (define argvs
               (intersperse-commas
@@ -455,7 +529,7 @@
           (for/list : (Listof Code)
                     ([v (in-list asm)])
             (unless (string? v)
-              (recur v 'expr)))
+              (recur v 'expr empty-tails)))
           (let ()
             (define expr
               (reverse

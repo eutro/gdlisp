@@ -184,7 +184,7 @@
       var func define
       signal class
       extends class-name
-      #%gdscript
+      #%gdscript recur
       #%app #%datum #%top]))
 
 (define-syntax-class gd-special-form-name
@@ -192,13 +192,13 @@
               var func define
               signal class
               extends class-name
-              #%gdscript]
+              #%gdscript recur]
   (pattern {~or*
             cond let begin for match
             var func define
             signal class
             extends class-name
-            #%gdscript}))
+            #%gdscript recur}))
 
 (define-syntax-class gd-special-form
   (pattern {~or* :gd-special-form-name
@@ -264,7 +264,7 @@
 (define-syntax-class gd-expr-postexpand
   #:description "expression"
   #:attributes (expr)
-  #:literals [cond else let begin for match #%gdscript]
+  #:literals [cond else let begin for match recur #%gdscript]
   #:commit
 
   (pattern (cond
@@ -285,6 +285,12 @@
             (let {~? name.dat-str #f}
               (binding.binding ...)
               body.expr)))
+
+  (pattern (recur ~! target:gd-id args:gd-expr ...)
+           #:attr expr
+           (datum
+            (recur target.dat-str
+                   (args.expr ...))))
 
   (pattern (begin ~! e:gd-block)
            #:attr expr (expr-ir-expr (datum e.expr)))

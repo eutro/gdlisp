@@ -23,6 +23,7 @@
   [export "in a definition"]
   [extends "in class"]
   [match "as an expression"]
+  [recur "as an expression"]
   [var "as a statement"]
   [signal "as a statement"]
   [func "as a statement"]

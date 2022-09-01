@@ -113,6 +113,7 @@ Statements and expressions have the following grammar:
                 [special-expr
                  cond-expr
                  let-expr
+                 recur-expr
                  match-expr
                  for-expr]
 
@@ -138,6 +139,9 @@ Statements and expressions have the following grammar:
                 [maybe-let-name
                  code:blank
                  name-id]
+
+                [recur-expr
+                 (recur recur-target-id arg-expr ...)]
 
                 [match-expr
                  (match target-expr
