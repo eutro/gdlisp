@@ -14,6 +14,7 @@
 (define to-attach (box '(gdlisp racket)))
 (define watch? (box #f))
 (command-line
+ #:program "gdlisp"
  #:multi
  [("--attach" "-a")
   module-name
