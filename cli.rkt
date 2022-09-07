@@ -17,11 +17,11 @@
  #:multi
  [("--attach" "-a")
   module-name
-  "preload a module and attach it before reloading a file, saving time if it is (require ...)d"
+  "Preload a module and attach it before reloading a file, saving time if it is (require ...)d"
   (set-box! to-attach (cons (string->symbol module-name) (unbox to-attach)))]
  #:once-each
  [("--watch" "-w")
-  "compile once, then watch files for changes"
+  "Compile once, then watch files for changes"
   (set-box! watch? #t)]
  #:args (path . more-paths)
  (let ()
