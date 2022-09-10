@@ -389,7 +389,9 @@
 (define-syntax-class gd-var-prefix
   #:description "variable prefix"
   #:attributes (pref)
-  #:literals [export]
+  #:literals [export onready]
+  (pattern onready
+           #:attr pref "onready")
   (pattern export
            #:attr pref "export")
   (pattern (export args ...)

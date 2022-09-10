@@ -21,6 +21,7 @@
 (define (mangle name)
   (with-output-to-string
     (λ ()
+      (define esc-slashes #t)
       (define i
         (cond
           [(zero? (string-length name))
@@ -31,6 +32,7 @@
            0]
           [(char=? (string-ref name 0) #\$)
            (display "$")
+           (set! esc-slashes #f)
            1]
           [else 0]))
       (for ([c (in-string name i)])
@@ -63,7 +65,7 @@
            [#\} "_RBRACE_"]
            [#\[ "_LBRACK_"]
            [#\] "_RBRACK_"]
-           [#\/ "_SLASH_"]
+           [#\/ (if esc-slashes "_SLASH_" "/")]
            [#\\ "_BSLASH_"]
            [#\? "_QMARK_"]
            [#\space "_SPACE_"]

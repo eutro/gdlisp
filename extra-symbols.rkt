@@ -21,6 +21,7 @@
 (define-disallows
   [class-name "at the top level"]
   [export "in a definition"]
+  [onready "in a definition"]
   [extends "in class"]
   [match "as an expression"]
   [recur "as an expression"]
