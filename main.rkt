@@ -7,7 +7,10 @@
             racket/base
             racket/port
             syntax/parse
-            syntax/datum))
+            syntax/datum)
+           (only-in
+            "extra-symbols.rkt"
+            begin-escape))
 
   (provide gd-modbeg
            gd-top-interaction)
@@ -16,9 +19,9 @@
     (define-splicing-syntax-class gd-module-stmts
       #:attributes ([class-stmts 1]
                     [other-stmts 1])
-      #:literals [require module]
+      #:literals [require module begin-escape]
       (pattern {~seq
-                {~or* {~and ({~or require module} . _) top-form}
+                {~or* {~and ({~or require module begin-escape} . _) top-form}
                       class-form}
                 ...}
                #:attr [other-stmts 1] (syntax-e #'({~? top-form} ...))
@@ -66,7 +69,14 @@
          (all-from-out
           "extra-symbols.rkt"
           "extra-macros.rkt")
-         (except-out
-          (all-from-out racket/base)
-          #%module-begin
-          #%top-interaction))
+
+         module
+         #%require require
+         only-in except-in prefix-in rename-in combine-in
+         relative-in only-meta-in only-space-in for-syntax
+         for-template for-label for-meta for-space submod
+         quote
+
+         define-syntax-rule ...
+
+         #%app #%datum #%top)

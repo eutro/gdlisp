@@ -2,23 +2,25 @@
 
 (require "compiler.rkt"
          "utils.rkt"
-         "extra-symbols.rkt"
+
+         (prefix-in
+          $
+          (combine-in
+           "extra-symbols.rkt"
+           (for-template "extra-symbols.rkt")))
+
          racket/format
          racket/list
          racket/string
-         (rename-in
-          racket/match
-          [match rkt-match])
-         (except-in
-          syntax/parse
-          static)
+
+         syntax/parse
          syntax/datum
          syntax/parse/class/paren-shape
-         (for-template
-          racket/base
-          "extra-symbols.rkt"))
 
-(provide gd-top-class-stmts)
+         (for-template racket/base))
+
+(provide gd-top-class-stmts
+         maybe-local-expand)
 
 (define-splicing-syntax-class kv-pair
   #:description "key-value pair"
@@ -38,20 +40,20 @@
 (define-splicing-syntax-class gd-binding
   #:description "binding"
   #:attributes (binding)
-  #:literals (: :=)
-  (pattern {~seq name:gd-id : type:gd-id value:gd-expr}
+  #:literals [$: $:=]
+  (pattern {~seq name:gd-id $: type:gd-id value:gd-expr}
            #:attr binding
            (binding
             (attribute name.dat-str)
             (attribute type.dat-str)
             (attribute value.expr)))
-  (pattern {~seq name:gd-id : type:gd-id}
+  (pattern {~seq name:gd-id $: type:gd-id}
            #:attr binding
            (binding
             (attribute name.dat-str)
             (attribute type.dat-str)
             #f))
-  (pattern {~seq name:gd-id := value:gd-expr}
+  (pattern {~seq name:gd-id $:= value:gd-expr}
            #:attr binding
            (binding
             (attribute name.dat-str)
@@ -100,22 +102,22 @@
 (define-syntax-class gd-pattern
   #:description "match pattern"
   #:attributes (pattern has-var)
-  #:literals [_ var ..]
+  #:literals [$_ $var $..]
   #:commit
   (pattern :gd-const-pattern)
   (pattern v:gd-id
            #:attr pattern (attribute v.dat-str)
            #:attr has-var #f)
-  (pattern _
+  (pattern $_
            #:attr pattern "_"
            #:attr has-var #f)
-  (pattern (var name:gd-id)
+  (pattern ($var name:gd-id)
            #:attr pattern (format "var ~a" (attribute name.dat-str))
            #:attr has-var #t)
   (pattern [~brackets
             ~!
-            {~and {~not ..} subpat:gd-pattern} ...
-            {~optional {~and .. dots}}]
+            {~and {~not $..} subpat:gd-pattern} ...
+            {~optional {~and $.. dots}}]
            #:attr pattern
            (format
             "[~a]"
@@ -132,7 +134,7 @@
   (pattern {~braces
             ~!
             {~seq key:gd-const-pattern value:gd-pattern} ...
-            {~optional {~and .. dots}}}
+            {~optional {~and $.. dots}}}
            #:attr pattern
            (format
             "{~a}"
@@ -151,8 +153,7 @@
 (define-syntax-class gd-top-pattern
   #:description "top-level match pattern"
   #:attributes (pattern)
-  #:literals [or]
-  (pattern (or ~! subpat:gd-pattern ...)
+  (pattern ({~datum or} ~! subpat:gd-pattern ...)
            #:fail-when
            (ormap values (datum (subpat.has-var ...)))
            "(or ...) pattern is not allowed to bind variables"
@@ -166,19 +167,19 @@
 (define-splicing-syntax-class gd-block-inner
   #:description #f
   #:attributes (expr)
-  #:literals [define]
-  (pattern {~seq {~and (define ~! bd:gd-binding) stx} tail-exprs ...}
+  #:literals [$define]
+  (pattern {~seq {~and ($define ~! bd:gd-binding) stx} tail-exprs ...}
            #:cut
            #:with (tail:gd-block-inner) #'(tail-exprs ...)
            #:attr expr
-           (expr-ir
+           (make-expr-ir
             (datum (let #f (bd.binding) tail.expr))
             #'stx))
   (pattern {~seq exp:gd-expr tail-exprs ...+}
            #:cut
            #:with (tail:gd-block-inner) #'(tail-exprs ...)
            #:attr expr
-           (expr-ir
+           (make-expr-ir
             (datum (begin (exp.expr tail.expr)))
             #'exp))
   (pattern stx
@@ -192,26 +193,28 @@
 
 (define stop-exprs
   (syntax-e
-   #'[cond let begin for match
-      var func define
-      signal class
-      extends class-name
-      #%gdscript recur
-      #%app #%datum #%top]))
+   #'[#%app
+      #%datum
+      #%top
+      $cond $let $begin $for $match
+      $var $func $define
+      $signal $class
+      $extends $class-name
+      $#%gdscript $recur]))
 
 (define-syntax-class gd-special-form-name
   #:description #f
-  #:literals [cond let begin for match
-              var func define
-              signal class
-              extends class-name
-              #%gdscript recur]
+  #:literals [$cond $let $begin $for $match
+                    $var $func $define
+                    $signal $class
+                    $extends $class-name
+                    $#%gdscript $recur]
   (pattern {~or*
-            cond let begin for match
-            var func define
-            signal class
-            extends class-name
-            #%gdscript recur}))
+            $cond $let $begin $for $match
+            $var $func $define
+            $signal $class
+            $extends $class-name
+            $#%gdscript $recur}))
 
 (define-syntax-class gd-special-form
   #:description #f
@@ -242,12 +245,12 @@
   #:attributes (expr)
   (pattern :gd-special-form
            #:with e:gd-expr-postexpand this-syntax
-           #:attr expr (expr-ir (datum e.expr) this-syntax))
+           #:attr expr (make-expr-ir (datum e.expr) this-syntax))
   (pattern form
            #:cut
            #:do [(define expanded (maybe-local-expand #'form))]
            #:with e:gd-expr-postexpand expanded
-           #:attr expr (expr-ir (datum e.expr) this-syntax)
+           #:attr expr (make-expr-ir (datum e.expr) this-syntax)
            #;#;
            #:do [(displayln "--- expansion ---")
                  (writeln (syntax->datum #'form))
@@ -281,55 +284,55 @@
 (define-syntax-class gd-expr-postexpand
   #:description "expression"
   #:attributes (expr)
-  #:literals [cond else let begin for match recur #%gdscript]
+  #:literals [$cond $else $let $begin $for $match $recur $#%gdscript]
   #:commit
 
-  (pattern (cond
+  (pattern ($cond
             ~!
-            [{~and {~not else} pred-expr:gd-expr} then-expr:gd-block] ...
-            {~optional [else else-expr:gd-block]})
+            [{~and {~not $else} pred-expr:gd-expr} then-expr:gd-block] ...
+            {~optional [$else else-expr:gd-block]})
            #:attr expr
            (datum
             (cond
               ((pred-expr.expr . then-expr.expr) ...)
               {~? else-expr.expr #f})))
 
-  (pattern (let ~! {~optional name:gd-id}
-             ([binding:gd-binding] ...)
-             body:gd-block)
+  (pattern ($let ~! {~optional name:gd-id}
+                 ([binding:gd-binding] ...)
+                 body:gd-block)
            #:attr expr
            (datum
             (let {~? name.dat-str #f}
               (binding.binding ...)
               body.expr)))
 
-  (pattern (recur ~! target:gd-id args:gd-expr ...)
+  (pattern ($recur ~! target:gd-id args:gd-expr ...)
            #:attr expr
            (datum
             (recur target.dat-str
                    (args.expr ...))))
 
-  (pattern (begin ~! e:gd-block)
+  (pattern ($begin ~! e:gd-block)
            #:attr expr (expr-ir-expr (datum e.expr)))
 
-  (pattern (for ~! ([name:gd-id target:gd-expr])
-                body:gd-block)
+  (pattern ($for ~! ([name:gd-id target:gd-expr])
+                 body:gd-block)
            #:attr expr
            (datum
             (for name.dat-str target.expr
                  body.expr)))
 
-  (pattern (match ~!
-             target:gd-expr
-             {~describe
-              "match clause"
-              [pattern:gd-top-pattern body:gd-block]} ...)
+  (pattern ($match ~!
+                   target:gd-expr
+                   {~describe
+                    "match clause"
+                    [pattern:gd-top-pattern body:gd-block]} ...)
            #:attr expr
            (datum
             (match target.expr
               ([pattern.pattern . body.expr] ...))))
 
-  (pattern (#%gdscript ~! asm-e:gd-asm ...)
+  (pattern ($#%gdscript ~! asm-e:gd-asm ...)
            #:attr expr
            (datum
             (asm (asm-e.asm ...))))
@@ -337,7 +340,7 @@
   (pattern {~describe
             "list literal"
             {~and {~describe #:opaque "list literal" [~brackets ~! _ ...]}
-                  [~brackets subexprs:gd-expr ...]}}
+                  [~brackets ~! subexprs:gd-expr ...]}}
            #:attr expr
            (with-datum ([(exprs ...)
                          (intersperse (datum (subexprs.expr ...)) ", ")])
@@ -347,7 +350,7 @@
   (pattern {~describe
             "map literal"
             {~and {~describe #:opaque "map literal" {~braces ~! _ ...}}
-                  {~braces kv:kv-pair ...}}}
+                  {~braces ~! kv:kv-pair ...}}}
            #:attr expr
            (with-datum ([(kvs ...)
                          (append*
@@ -371,30 +374,43 @@
             (asm (target.expr "." field.name))))
   (pattern {~describe
             "method call"
-            (method:gd-methodref ~! target:gd-expr args:gd-expr ...)}
+            {~or ((method:gd-fieldref ~! target:gd-expr) ~! args:gd-expr ...)
+                 (method:gd-methodref ~! target:gd-expr args:gd-expr ...)}}
            #:attr expr
            (quasidatum
             (call
-             (undatum (expr-ir (datum (asm (target.expr "." method.name)))
-                               this-syntax))
+             target.expr
+             method.name
              (args.expr ...))))
 
   (pattern {~describe
             "call expression"
-            (callee:gd-expr args:gd-expr ...)}
+            (callee:gd-id ~! args:gd-expr ...)}
            #:attr expr
-           (datum
-            (call callee.expr (args.expr ...)))))
+           (quasidatum
+            (call
+             #f
+             (undatum (mangle (datum callee.dat-str)))
+             (args.expr ...))))
+  (pattern {~describe
+            "call expression"
+            (~! callee:gd-expr args:gd-expr ...)}
+          #:attr expr
+          (datum
+           (call
+            callee.expr
+            "call"
+            (args.expr ...)))))
 
 (define-syntax-class gd-var-prefix
   #:description "variable prefix"
   #:attributes (pref)
-  #:literals [export onready]
-  (pattern onready
+  #:literals [$export $onready]
+  (pattern $onready
            #:attr pref "onready")
-  (pattern export
+  (pattern $export
            #:attr pref "export")
-  (pattern (export args ...)
+  (pattern ($export args ...)
            #:attr pref
            (format
             "export(~a)"
@@ -406,11 +422,12 @@
 (define-syntax-class gd-def
   #:description "definition"
   #:attributes (stmt)
-  #:literals [var func define : static]
+  #:literals [$var $func $const $define $: $static]
   #:commit
   (pattern {~describe
             "variable definition"
-            ({~or* {~and var ~!} define}
+            ({~or* {~and $var ~!} $define}
+             {~optional {~and $const ~! {~bind [is-const? #t]}}}
              {~optional exp:gd-var-prefix}
              binding:gd-binding)}
            #:with {~describe
@@ -418,16 +435,16 @@
                    {~not _:gd-var-prefix}} #'binding
            #:attr stmt
            (datum
-            (var exp.pref binding.binding)))
+            (var exp.pref {~? is-const? #f} binding.binding)))
   (pattern {~describe
             "function definition"
-            ({~or* {~and func ~!} define}
-             {~optional {~and static ~! {~bind [is-static 'static]}}}
+            ({~or* {~and $func ~!} $define}
+             {~optional {~and $static ~! {~bind [is-static 'static]}}}
              (name:gd-id params:gd-param ...)
              ~!
              {~commit
               {~seq
-               {~optional {~seq : ~! return-hint:gd-id}}
+               {~optional {~seq $: ~! return-hint:gd-id}}
                ~! body:gd-block}})}
            #:attr stmt
            (quasidatum
@@ -441,14 +458,14 @@
 (define-syntax-class gd-stmt-postexpand
   #:description "statement"
   #:attributes (stmt)
-  #:literals [signal class var func define begin]
+  #:literals [$signal $class $var $func $define $begin]
   #:commit
 
-  (pattern {~and ({~or* var func define} ~! _ ...) :gd-def})
+  (pattern {~and ({~or* $var $func $define} ~! _ ...) :gd-def})
   (pattern :gd-def)
 
-  (pattern (class ~! name:gd-id
-             body:gd-class-stmts)
+  (pattern ($class ~! name:gd-id
+                   body:gd-class-stmts)
            #:attr stmt
            `(class
               ,(class-ir
@@ -456,30 +473,30 @@
                 (datum body.parent)
                 (datum body.stmts))))
 
-  (pattern (signal ~! name:gd-id)
+  (pattern ($signal ~! name:gd-id)
            #:attr stmt
            (datum
             (signal name.dat-str)))
 
-  (pattern (begin ~! stmts:gd-stmt ...)
+  (pattern ($begin ~! stmts:gd-stmt ...)
            #:attr stmt
            (datum
             (begin (stmts.stmt ...))))
 
   (pattern gde:gd-expr-postexpand
            #:attr stmt
-           (list 'expr (expr-ir (datum gde.expr) #'gde))))
+           (list 'expr (make-expr-ir (datum gde.expr) #'gde))))
 
 (define-splicing-syntax-class gd-class-stmts
   #:description "class statements"
   #:attributes (parent stmts)
-  #:literals [extends]
+  #:literals [$extends]
   #:commit
   (pattern {~seq
-            {~or* (extends ~! parent-name:gd-id)
+            {~or* ($extends ~! parent-name:gd-id)
                   {~and ~! stmt:gd-stmt}}
             ...}
-           #:do [(define extendses (datum ({~? parent-name.dat-str} ...)))]
+           #:do [(define extendses (filter values (datum ({~? parent-name.dat-str} ...))))]
            #:fail-when (< 1 (length extendses)) "expected at most one (extends ...) statement"
            #:attr parent (if (null? extendses) #f (car extendses))
            #:attr stmts (filter values (datum ({~? stmt.stmt} ...)))))
@@ -487,11 +504,11 @@
 (define-splicing-syntax-class gd-top-class-stmts
   #:description "top level statements"
   #:attributes (class-ir)
-  #:literals [extends class-name]
+  #:literals [$extends $class-name]
   #:commit
   (pattern {~seq
-            {~or* (class-name ~! name:gd-id)
-                  (extends ~! parent-name:gd-id)
+            {~or* ($class-name ~! name:gd-id)
+                  ($extends ~! parent-name:gd-id)
                   {~and ~! stmt:gd-stmt}}
             ...}
            #:do [(define extendses (filter values (datum ({~? parent-name.dat-str} ...))))

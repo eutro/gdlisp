@@ -44,6 +44,7 @@
                      (char<=? #\0 c #\9))))
             c]
            [(or #\_ #\-) "_"]
+           [#\. "."]
            ;; copied shamelessly from Clojure...
            [#\: "_COLON_"]
            [#\+ "_PLUS_"]

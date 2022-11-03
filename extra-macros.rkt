@@ -1,34 +1,41 @@
 #lang racket/base
 
-(require "extra-symbols.rkt"
+(require (prefix-in $ "extra-symbols.rkt")
          (for-syntax
           racket/base
           racket/format
-          syntax/parse)
-         syntax/parse/define)
+          syntax/parse
+          syntax/datum))
 
 (begin-for-syntax
   (define-syntax-class infix
     #:attributes (name str)
     (pattern [id:id tok:str]
              #:attr name #'id
-             #:attr str #'tok)
+             #:attr str #'tok
+             #:attr left? #t
+             #:attr right? #t)
+
     (pattern id:id
              #:attr name #'id
-             #:attr str (datum->syntax this-syntax (~a (syntax-e #'name))))))
+             #:attr str (datum->syntax this-syntax (~a (syntax-e #'name)))
+             #:attr left? #t
+             #:attr right? #t)))
 
 (define-syntax (define-infixes stx)
   (syntax-parse stx
-    [(_ clause:infix ...)
-     (syntax/loc stx
+    [(_ clause:infix . tail)
+     (quasisyntax/loc stx
        (begin
          (define-syntax (clause.name stx)
            (syntax-parse stx
              [(_ lhs rhs)
               (syntax/loc stx
-                (#%gdscript "(" (!expr lhs) ") " clause.str " (" (!expr rhs) ")"))]))
-         ...
-         (provide clause.name ...)))]))
+                ($#%gdscript "(" (!expr lhs) " " clause.str " " (!expr rhs) ")"))]))
+         (provide clause.name)
+         #,(quasisyntax/loc stx
+             (define-infixes . tail))))]
+    [(_) #'(begin)]))
 
 (define-syntax (define-assignments stx)
   (syntax-parse stx
@@ -39,20 +46,9 @@
            (syntax-parse stx
              [(_ lhs rhs)
               (syntax/loc stx
-                (#%gdscript (!expr lhs) " " clause.str " (" (!expr rhs) ")"))]))
-         ...
-         (provide clause.name ...)))]))
-
-(define-syntax (define-castlike stx)
-  (syntax-parse stx
-    [(_ clause:infix ...)
-     (syntax/loc stx
-       (begin
-         (define-syntax (clause.name stx)
-           (syntax-parse stx
-             [(_ lhs rhs)
-              (syntax/loc stx
-                (#%gdscript "(" (!expr lhs) ") " clause.str " " (!expr rhs)))]))
+                ($begin
+                  ($#%gdscript (!expr lhs) " " clause.str " " (!expr rhs))
+                  null))]))
          ...
          (provide clause.name ...)))]))
 
@@ -69,14 +65,11 @@
              {~? [(_) #'identity]}
              [(_ x)
               (syntax/loc stx
-                {~? (#%gdscript pre ... "(" (!expr x) ")")
+                {~? ($#%gdscript "(" pre ... (!expr x) ")")
                     x})]
              [(_ lhs rhs)
               (syntax/loc stx
-                (#%gdscript
-                 "(" (!expr lhs) ") "
-                 clause.str
-                 " (" (!expr rhs) ")"))]
+                ($#%gdscript "(" (!expr lhs) " " clause.str " " (!expr rhs) ")"))]
              [(_ lhs rhs rhses (... ...))
               (syntax/loc stx
                 (clause.name (clause.name lhs rhs) rhses (... ...)))]))
@@ -86,7 +79,7 @@
 (define-infixes
   ** ~ % << >>
   < > == != >= <=
-  in)
+  in is as)
 
 (define-leftassoc
   [+ #:identity 0]
@@ -103,34 +96,75 @@
   [set! "="]
   [+set! "+="]
   [-set! "-="]
-  [*set! "-="]
-  [/set! "-="]
-  [%set! "-="]
-  [**set! "-="]
+  [*set! "*="]
+  [/set! "/="]
+  [%set! "%="]
+  [**set! "**="]
   [bit-and-set! "&="]
+  [bit-or-set! "&="]
   [<<set! "<<="]
   [>>set! ">>="])
 
-(define-castlike
-  is as)
+;; General lisp macros...
 
 (provide if when ref)
 
-(define-syntax-parse-rule
-  (if pred-expr:expr
-      then-expr:expr
-      else-expr:expr)
-  (cond
-    [pred-expr then-expr]
-    [else else-expr]))
+(define-syntax (define-good-syntax-parse-rule stx)
+  (syntax-parse stx
+    [(_ (macro-id . pattern) pattern-directive ... template)
+     (syntax/loc stx
+       (define-syntax (macro-id stx)
+         (syntax-parse stx
+           #:track-literals
+           [({~var macro-id id} . pattern)
+            pattern-directive ...
+            (syntax/loc stx
+              template)])))]))
 
-(define-syntax-parse-rule
-  (when pred-expr:expr
-    body-exprs:expr ...)
-  (cond
+(define-good-syntax-parse-rule (if pred-expr:expr
+                                   then-expr:expr
+                                   else-expr:expr)
+  ($cond
+    [pred-expr then-expr]
+    [$else else-expr]))
+
+(define-good-syntax-parse-rule (when pred-expr:expr
+                                 body-exprs:expr ...)
+  ($cond
     [pred-expr
      body-exprs ...]))
 
-(define-syntax-parse-rule
-  (ref target:expr key:expr)
-  (#%gdscript (!expr target) "[" (!expr key) "]"))
+(define-good-syntax-parse-rule (ref target:expr key:expr)
+  ($#%gdscript (!expr target) "[" (!expr key) "]"))
+
+;; More specific macros...
+
+(provide fset! yield-for some~> await)
+
+(define-good-syntax-parse-rule (fset! x f y ...)
+  (set! x (f x y ...)))
+
+(define-good-syntax-parse-rule (yield-for secs:expr)
+  (yield (.create-timer (get_tree) secs) "timeout"))
+
+(define-syntax (some~> stx)
+  (syntax-parse stx
+    [(_ expr f:id)
+     (syntax/loc stx
+       (some~> expr (f)))]
+    [(_ expr (f args ...))
+     (with-syntax ([tmp (gensym "tmp")])
+       (syntax/loc stx
+         ($let ([tmp expr])
+           (when (!= tmp null)
+             (f tmp args ...)))))]))
+
+(define-syntax (await stx)
+  (syntax-parse stx
+    [(_ maybe-coro:expr)
+     (with-syntax ([tmp (gensym "tmp")])
+       (syntax/loc stx
+         ($let ([tmp maybe-coro])
+           (if (is tmp GDScriptFunctionState)
+             (yield tmp "completed")
+             tmp))))]))
