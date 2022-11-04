@@ -276,10 +276,13 @@
 (define (reset-temps!) : Void
   (void (thread-cell-set! tempc 0)))
 
-(define (gentemp) : String
+(define (next-tempc) : Number
   (define v (thread-cell-ref tempc))
-  (begin0 (format "__temp_~a" v)
-    (thread-cell-set! tempc (add1 v))))
+  (thread-cell-set! tempc (add1 v))
+  v)
+
+(define (gentemp) : String
+  (format "__temp_~a" (next-tempc)))
 
 (define-type Position (U 'stmt 'expr 'tail))
 
@@ -471,7 +474,7 @@
            (define-values (header emit result)
              (block-expr-in-pos pos))
            (define mangled (mangle name))
-           (define cont-name (string-append "__continue_" mangled))
+           (define cont-name (format "__continue_~a_~a" mangled (next-tempc)))
            (define temp-names
              (for/list : (Listof String)
                        ([b (in-list bindings)]

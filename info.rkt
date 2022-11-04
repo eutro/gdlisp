@@ -4,7 +4,7 @@
 (define build-deps '("scribble-lib" "racket-doc"))
 (define scribblings '(("scribblings/gdlisp.scrbl" ())))
 (define pkg-desc "A lisp dialect that compiles to GDScript.")
-(define version "0.3")
+(define version "0.4")
 (define pkg-authors '(eutro))
 (define license '(Apache-2.0 OR MIT))
 (define raco-commands
