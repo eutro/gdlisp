@@ -101,7 +101,7 @@
   [%set! "%="]
   [**set! "**="]
   [bit-and-set! "&="]
-  [bit-or-set! "&="]
+  [bit-or-set! "|="]
   [<<set! "<<="]
   [>>set! ">>="])
 
